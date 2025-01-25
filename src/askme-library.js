@@ -91,6 +91,71 @@ export default class AskmeLibrary {
         this.icon.style.display = 'block';
     }
 
+
+
+    getRelevantAttributes(element) {
+        const relevantAttrs = ['id', 'name', 'value'];
+        const attrs = {};
+
+        for (let attr of relevantAttrs) {
+            if (element.hasAttribute(attr)) {
+                attrs[attr] = element.getAttribute(attr);
+            }
+        }
+
+        // Special handling for form elements
+        if (element.tagName === 'INPUT' || element.tagName === 'SELECT' || element.tagName === 'TEXTAREA') {
+            if (element.value) attrs.value = element.value;
+        }
+
+        return Object.keys(attrs).length > 0 ? attrs : undefined;
+    }
+    extractDOMContent(rootElement = document.body) {
+        return this.traverseDOM(rootElement);
+    }
+    traverseDOM(element) {
+        // Skip script, style, and meta tags
+        if (['SCRIPT', 'STYLE', 'META', 'LINK', 'button'].includes(element.tagName)) {
+            return null;
+        }
+
+        const nodeInfo = {
+            tag: element.tagName.toLowerCase(),
+            attributes: this.getRelevantAttributes(element),
+            text: this.getElementText(element)
+        };
+
+        // Process child nodes
+        if (element.children && element.children.length > 0) {
+            nodeInfo.children = Array.from(element.children)
+                .map(child => this.traverseDOM(child))
+                .filter(child => child !== null);
+        }
+
+        return nodeInfo;
+    }
+
+    getAttributes(element) {
+        const attrs = {};
+        for (let i = 0; i < element.attributes.length; i++) {
+            const attr = element.attributes[i];
+            attrs[attr.name] = attr.value;
+        }
+        return Object.keys(attrs).length > 0 ? attrs : undefined;
+    }
+
+    // Method to convert DOM to JSON string for easy transmission
+    getDOMContentJSON(rootElement) {
+        const domContent = this.extractDOMContent(rootElement);
+        return JSON.stringify(domContent, null, 2);
+    }
+
+    getElementText(element) {
+        // Get text content, trimming whitespace
+        const text = element.textContent?.trim();
+        return text && text.length > 0 ? text : undefined;
+    }
+
     attachEventListeners() {
         this.icon.addEventListener('click', () => this.toggleChatInterface());
         const minimizeButton = this.chatInterface.querySelector('#askme-minimize');
@@ -114,8 +179,14 @@ export default class AskmeLibrary {
         const inputField = document.getElementById('askme-input');
         const messagesContainer = document.getElementById('askme-messages');
         const message = inputField.value.trim();
-
         if (!message) return;
+        const domContentJSON = this.getDOMContentJSON();
+        console.log(domContentJSON)
+        const payload_container = document.querySelector('#specific-container')
+        if (payload_container) {
+            const specificElementJSON = this.getDOMContentJSON(payload_container);
+        }
+
 
         // Add user message
         this.addMessage('user', message);
@@ -142,6 +213,45 @@ export default class AskmeLibrary {
         messageElement.textContent = text;
         messagesContainer.appendChild(messageElement);
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    fetchResponseSSE(message) {
+        const messagesContainer = document.getElementById('askme-messages');
+        const botMessageElement = document.createElement('div');
+        botMessageElement.style.cssText = 'margin-bottom: 10px; padding: 10px; background-color: #f0f0f0; border-radius: 5px;';
+        messagesContainer.appendChild(botMessageElement);
+
+        try {
+            const eventSource = new EventSource(`${this.config.apiEndpoint}?query=${encodeURIComponent(message)}`);
+
+            eventSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+
+                if (data.type === 'start') {
+                    botMessageElement.innerHTML = ''; // Clear previous content
+                }
+
+                if (data.type === 'content') {
+                    botMessageElement.innerHTML += data.content;
+                }
+
+                if (data.type === 'end') {
+                    eventSource.close();
+                    this.logMessage('bot', botMessageElement.textContent);
+                }
+
+                // Auto-scroll to bottom
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            };
+
+            eventSource.onerror = (error) => {
+                botMessageElement.innerHTML = 'Error fetching response';
+                eventSource.close();
+                console.error('SSE Error:', error);
+            };
+        } catch (error) {
+            console.error('SSE Connection Error:', error);
+        }
     }
 
     async fetchResponse(message) {
